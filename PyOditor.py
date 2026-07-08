@@ -3,7 +3,7 @@ import socket
 import threading
 import requests
 import datetime
-import ssl
+import ss
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
