@@ -5,6 +5,7 @@
 A command-line automated security reconnaissance and auditing tool designed to quickly inspect the attack surface of any network target (URL, FQDN, or IP address).
 
 ## 🚀 Features
+
 - **Bulk / Multi-Target Auditing:** Input multiple targets separated by commas (e.g., github.com, 1.1.1.1, https://google.com) to audit an entire queue sequentially.
 
 - **Smart URL & FQDN Parsing:** Automatic syntactic extraction to isolate the hostname from redundant web paths or parameters.
