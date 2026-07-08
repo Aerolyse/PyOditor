@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import socket
 import threading
 import requests
@@ -7,61 +6,52 @@ import ssl
 from urllib.parse import urlparse
 from concurrent.futures import ThreadPoolExecutor
 
-# Verrou pour l'affichage propre dans la console (multi-thread)
+# Lock for clean console output during multi-threaded port scanning
 print_lock = threading.Lock()
 
-# Configuration du bareme de notation pour les headers HTTP (Total = 10 points)
+# Security headers scoring configuration (Total = 10 points)
 SECURITY_HEADERS = {
-    "Strict-Transport-Security": {"points": 2.5, "desc": "Protection HTTPS (HSTS)"},
-    "Content-Security-Policy": {"points": 2.5, "desc": "Protection contre les injections XSS (CSP)"},
-    "X-Frame-Options": {"points": 2.0, "desc": "Protection contre le Clickjacking"},
-    "X-Content-Type-Options": {"points": 1.5, "desc": "Protection contre le MIME-sniffing"},
-    "Referrer-Policy": {"points": 1.5, "desc": "Gestion du partage d'origine (Referrer)"}
+    "Strict-Transport-Security": {"points": 2.5, "desc": "HTTPS Protection (HSTS)"},
+    "Content-Security-Policy": {"points": 2.5, "desc": "XSS Injection Protection (CSP)"},
+    "X-Frame-Options": {"points": 2.0, "desc": "Clickjacking Protection"},
+    "X-Content-Type-Options": {"points": 1.5, "desc": "MIME-sniffing Protection"},
+    "Referrer-Policy": {"points": 1.5, "desc": "Origin sharing policy (Referrer)"}
 }
 
 def clean_target(user_input):
-    """
-    Extrait le FQDN/Nom d'hote propre a partir d'une entree utilisateur 
-    qui peut etre une URL complete ou un nom de domaine brut.
-    """
+    """Extracts the clean FQDN/Hostname from a raw URL string or raw domain."""
     input_str = user_input.strip()
-    # Si l'utilisateur n'a pas mis de scheme (http/https), urlparse ne fonctionne pas correctement.
-    # On ajoute temporairement un scheme fictif pour forcer le parsing correct.
     if not input_str.startswith(("http://", "https://")):
         parsed = urlparse(f"http://{input_str}")
     else:
         parsed = urlparse(input_str)
-        
-    # On recupere le hostname (ex: scanme.nmap.org)
     hostname = parsed.hostname
-    
-    # Au cas ou urlparse echoue (entree malformee), on retourne l'entree de base nettoyee
     return hostname if hostname else input_str
 
 def scan_port(target_ip, port, timeout=2.0):
-    """Scane un port TCP et determine son etat"""
+    """Scans a single TCP port and returns its status."""
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         result = sock.connect_ex((target_ip, port))
         
-        status = "FILTRE / ERREUR"
+        status = "FILTERED / ERROR"
         if result == 0:
-            status = "OUVERT"
+            status = "OPEN"
         elif result in [11, 10061, 111]:
-            status = "FERME"
+            status = "CLOSED"
         elif result == 10035:
-            status = "FILTRE (WSAEWOULDBLOCK)"
+            status = "FILTERED (WSAEWOULDBLOCK)"
             
         sock.close()
         return status
     except socket.timeout:
-        return "FILTRE (Timeout)"
+        return "FILTERED (Timeout)"
     except Exception:
-        return "ERREUR"
+        return "ERROR"
 
 def check_tls_cert(hostname):
-    """Verifie la validite et la date d'expiration du certificat TLS"""
+    """Checks TLS certificate metadata and remaining valid days."""
     try:
         context = ssl.create_default_context()
         with socket.create_connection((hostname, 443), timeout=5) as sock:
@@ -73,25 +63,23 @@ def check_tls_cert(hostname):
         remaining_days = (expiry_date - datetime.datetime.utcnow()).days
         
         issuer = dict(x[0] for x in cert.get('issuer'))
-        issuer_name = issuer.get('commonName', issuer.get('organizationName', 'Inconnu'))
+        issuer_name = issuer.get('commonName', issuer.get('organizationName', 'Unknown'))
         
         return {
             "success": True,
             "issuer": issuer_name,
             "expiry_date": expiry_date.strftime('%Y-%m-%d %H:%M:%S UTC'),
             "remaining_days": remaining_days,
-            "status": "VALIDE" if remaining_days > 0 else "EXPIRE"
+            "status": "VALID" if remaining_days > 0 else "EXPIRED"
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 def analyze_http_headers(user_input):
-    """Analyse les en-tetes de securite HTTP (tente HTTPS, bascule en HTTP si echec)"""
-    # Si c'est deja une URL complete, on la teste telle quelle
+    """Analyzes security headers (tries HTTPS first, falls back to HTTP)."""
     if user_input.startswith(("http://", "https://")):
         urls_to_try = [user_input]
     else:
-        # Sinon on genere les deux versions classiques
         urls_to_try = [f"https://{user_input}", f"http://{user_input}"]
         
     response = None
@@ -107,7 +95,7 @@ def analyze_http_headers(user_input):
             continue
 
     if response is None:
-        return {"success": False, "url": user_input, "error": f"Connexion impossible : {error_msg}"}
+        return {"success": False, "url": user_input, "error": f"Connection failed: {error_msg}"}
         
     try:
         headers = response.headers
@@ -126,49 +114,46 @@ def analyze_http_headers(user_input):
         return {"success": False, "url": user_input, "error": str(e)}
 
 def generate_reports(original_input, hostname, ip_address, port_results, http_results, tls_results, date_str):
-    """Genere les rapports consolides en Markdown et HTML"""
+    """Generates localized Markdown and HTML audit reports."""
     clean_name = hostname.replace('.', '_')
     
-    # ---- 1. GENERATION DU RAPPORT MARKDOWN ----
+    # ---- 1. MARKDOWN GENERATION ----
     md_filename = f"rapport_audit_{clean_name}.md"
     with open(md_filename, "w", encoding="utf-8") as f:
-        f.write(f"# Rapport d'Audit de Securite Automatise\n\n")
-        f.write(f"**Date de l'audit :** {date_str}\n")
-        f.write(f"**Saisie utilisateur :** {original_input}\n")
-        f.write(f"**Cible detectee (Nom d'hote) :** {hostname} ({ip_address})\n\n")
+        f.write(f"# Automated Security Audit Report\n\n")
+        f.write(f"**Audit Date:** {date_str}\n")
+        f.write(f"**User Input:** {original_input}\n")
+        f.write(f"**Target Hostname:** {hostname} ({ip_address})\n\n")
         
-        # Section TLS
-        f.write(f"## 1. Verification du Certificat TLS\n\n")
+        f.write(f"## 1. TLS Certificate Verification\n\n")
         if tls_results and tls_results.get("success"):
-            f.write(f"**Statut du certificat :** {tls_results['status']}\n")
-            f.write(f"**Autorite de certification (CA) :** {tls_results['issuer']}\n")
-            f.write(f"**Date d'expiration :** {tls_results['expiry_date']}\n")
-            f.write(f"**Jours restants avant expiration :** {tls_results['remaining_days']} jours\n\n")
+            f.write(f"**Status:** {tls_results['status']}\n")
+            f.write(f"**Issuer CA:** {tls_results['issuer']}\n")
+            f.write(f"**Expiration Date:** {tls_results['expiry_date']}\n")
+            f.write(f"**Time Remaining:** {tls_results['remaining_days']} days\n\n")
         else:
-            msg = tls_results.get("error", "Pas de port 443 ouvert ou non supporte") if tls_results else "Non execute"
-            f.write(f"Impossible de verifier le certificat TLS sur le port 443. Motif : {msg}\n\n")
+            msg = tls_results.get("error", "Port 443 closed or unsupported") if tls_results else "Skipped"
+            f.write(f"Could not verify TLS certificate. Reason: {msg}\n\n")
         
-        # Section Ports
-        f.write(f"## 2. Scan de Ports TCP\n\n")
-        f.write(f"| Port | Etat |\n| :--- | :--- |\n")
+        f.write(f"## 2. TCP Port Scan\n\n")
+        f.write(f"| Port | Status |\n| :--- | :--- |\n")
         for port, status in sorted(port_results.items()):
             f.write(f"| {port} | {status} |\n")
             
-        # Section HTTP
-        f.write(f"\n## 3. Analyse des En-tetes de Securite HTTP\n\n")
+        f.write(f"\n## 3. HTTP Security Headers Analysis\n\n")
         if http_results and http_results.get("success"):
-            f.write(f"**URL analysee :** {http_results['url']}\n")
-            f.write(f"**Score Global :** {http_results['score']:.1f} / 10.0\n\n")
-            f.write(f"| En-tete | Statut | Points | Valeur / Description |\n| :--- | :--- | :--- | :--- |\n")
+            f.write(f"**Target URL:** {http_results['url']}\n")
+            f.write(f"**Overall Compliance Score:** {http_results['score']:.1f} / 10.0\n\n")
+            f.write(f"| Header | Status | Impact | Value / Description |\n| :--- | :--- | :--- | :--- |\n")
             for header, detail in http_results["details"].items():
-                status_txt = "[Present]" if detail["present"] else "[Manquant]"
+                status_txt = "[Present]" if detail["present"] else "[Missing]"
                 val_txt = detail["value"] if detail["present"] else SECURITY_HEADERS[header]["desc"]
                 f.write(f"| {header} | {status_txt} | +{detail['points']} pts | {val_txt} |\n")
         else:
-            msg = http_results.get("error", "Non specifie") if http_results else "Non execute"
-            f.write(f"L'analyse HTTP n'a pas pu etre effectuee ou a ete ignoree. Motif : {msg}\n")
+            msg = http_results.get("error", "Unknown") if http_results else "Skipped"
+            f.write(f"HTTP check could not complete. Reason: {msg}\n")
             
-    # ---- 2. GENERATION DU RAPPORT HTML ----
+    # ---- 2. HTML GENERATION ----
     html_filename = f"rapport_audit_{clean_name}.html"
     with open(html_filename, "w", encoding="utf-8") as f:
         css = """
@@ -187,48 +172,45 @@ def generate_reports(original_input, hostname, ip_address, port_results, http_re
         .score-box { font-size: 1.4em; font-weight: bold; padding: 15px; background: #fff; border: 2px solid #2980b9; display: inline-block; border-radius: 5px; margin: 15px 0; }
         .info-block { background: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); line-height: 1.6; }
         """
-        f.write(f"<!DOCTYPE html>\n<html>\n<head>\n<meta charset='utf-8'>\n<title>Rapport d'Audit - {hostname}</title>\n<style>{css}</style>\n</head>\n<body>")
-        f.write(f"<h1>Rapport d'Audit de Securite</h1>")
-        f.write(f"<div class='meta'><strong>Date de l'audit :</strong> {date_str} <br> <strong>Saisie initiale :</strong> {original_input} <br> <strong>Nom d'hote extrait :</strong> {hostname} ({ip_address})</div>")
+        f.write(f"<!DOCTYPE html>\n<html>\n<head>\n<meta charset='utf-8'>\n<title>Audit Report - {hostname}</title>\n<style>{css}</style>\n</head>\n<body>")
+        f.write(f"<h1>Security Audit Report</h1>")
+        f.write(f"<div class='meta'><strong>Audit Date:</strong> {date_str} <br> <strong>User Input:</strong> {original_input} <br> <strong>Resolved Host:</strong> {hostname} ({ip_address})</div>")
         
-        # Section 1 : TLS
-        f.write(f"<h2>1. Verification du Certificat TLS</h2>")
+        f.write(f"<h2>1. TLS Certificate Verification</h2>")
         if tls_results and tls_results.get("success"):
-            cl_status = "open" if tls_results["status"] == "VALIDE" else "closed"
+            cl_status = "open" if tls_results["status"] == "VALID" else "closed"
             f.write(f"<div class='info-block'>")
-            f.write(f"<strong>Statut de validite :</strong> <span class='badge {cl_status}'>{tls_results['status']}</span><br>")
-            f.write(f"<strong>Autorite d'emission (CA) :</strong> {tls_results['issuer']}<br>")
-            f.write(f"<strong>Date d'expiration :</strong> {tls_results['expiry_date']}<br>")
-            f.write(f"<strong>Temps restant :</strong> {tls_results['remaining_days']} jours")
+            f.write(f"<strong>Status:</strong> <span class='badge {cl_status}'>{tls_results['status']}</span><br>")
+            f.write(f"<strong>Issuer Authority (CA):</strong> {tls_results['issuer']}<br>")
+            f.write(f"<strong>Expiration Timeline:</strong> {tls_results['expiry_date']}<br>")
+            f.write(f"<strong>Time Left:</strong> {tls_results['remaining_days']} days")
             f.write(f"</div>")
         else:
-            msg = tls_results.get("error", "Non disponible") if tls_results else "Non execute"
-            f.write(f"<p style='color:#e74c3c;'>Impossible d'analyser le certificat TLS (Port 443 ferme ou injoignable). Motif : {msg}</p>")
+            msg = tls_results.get("error", "Unavailable") if tls_results else "Skipped"
+            f.write(f"<p style='color:#e74c3c;'>TLS verification unavailable (Port 443 timed out or closed). Reason: {msg}</p>")
 
-        # Section 2 : Ports
-        f.write(f"<h2>2. Scan de Ports TCP</h2>\n<table>\n<tr><th>Port</th><th>Etat</th></tr>")
+        f.write(f"<h2>2. TCP Port Scan</h2>\n<table>\n<tr><th>Port</th><th>Status</th></tr>")
         for port, status in sorted(port_results.items()):
             cl = "filtered"
-            if "OUVERT" in status: cl = "open"
-            elif "FERME" in status: cl = "closed"
+            if "OPEN" in status: cl = "open"
+            elif "CLOSED" in status: cl = "closed"
             f.write(f"<tr><td><strong>{port}</strong></td><td><span class='badge {cl}'>{status}</span></td></tr>")
         f.write(f"</table>")
         
-        # Section 3 : HTTP
-        f.write(f"<h2>3. Analyse des En-tetes HTTP de Securite</h2>")
+        f.write(f"<h2>3. HTTP Security Headers Analysis</h2>")
         if http_results and http_results.get("success"):
-            f.write(f"<p><strong>URL scannee :</strong> <a href='{http_results['url']}' target='_blank'>{http_results['url']}</a></p>")
-            f.write(f"<div class='score-box'>Score Global de Bonne Pratique : {http_results['score']:.1f} / 10.0</div>")
-            f.write(f"<table>\n<tr><th>En-tete</th><th>Statut</th><th>Contribution</th><th>Valeur detectee / Description</th></tr>")
+            f.write(f"<p><strong>Inspected Endpoint:</strong> <a href='{http_results['url']}' target='_blank'>{http_results['url']}</a></p>")
+            f.write(f"<div class='score-box'>Compliance Score: {http_results['score']:.1f} / 10.0</div>")
+            f.write(f"<table>\n<tr><th>Header</th><th>Status</th><th>Contribution</th><th>Detected Value / Description</th></tr>")
             for header, detail in http_results["details"].items():
                 st_cl = "open" if detail["present"] else "closed"
-                st_txt = "Present" if detail["present"] else "Manquant"
+                st_txt = "Present" if detail["present"] else "Missing"
                 vl = f"<code>{detail['value']}</code>" if detail["present"] else SECURITY_HEADERS[header]["desc"]
                 f.write(f"<tr><td><strong>{header}</strong></td><td><span class='badge {st_cl}'>{st_txt}</span></td><td>+{detail['points']} pts</td><td>{vl}</td></tr>")
             f.write(f"</table>")
         else:
-            msg = http_results.get("error", "Inconnue") if http_results else "Non execute"
-            f.write(f"<p style='color:#e74c3c;'>L'analyse HTTP n'a pas pu etre effectuee. Motif : {msg}</p>")
+            msg = http_results.get("error", "Unknown") if http_results else "Skipped"
+            f.write(f"<p style='color:#e74c3c;'>HTTP evaluation skipped. Reason: {msg}</p>")
             
         f.write(f"</body>\n</html>")
         
@@ -236,67 +218,76 @@ def generate_reports(original_input, hostname, ip_address, port_results, http_re
 
 def main():
     print("-" * 60)
-    print("      AUDITEUR DE SECURITE UNIFIE & RAPPORT (MD/HTML)")
+    print("                PyOditor - Multi-Target Edition")
     print("-" * 60)
     
-    user_input = input("Entrez la cible (URL, IP ou FQDN, ex: https://scanme.nmap.org/index.html) : ").strip()
-    if not user_input:
-        print("[-] Cible invalide.")
+    raw_input = input("Enter targets (separated by commas, e.g., github.com, 1.1.1.1) :\n> ").strip()
+    if not raw_input:
+        print("[-] Invalid input.")
         return
         
-    # Isolation magique du nom d'hote pour socket/TLS
-    hostname = clean_target(user_input)
-    
-    try:
-        target_ip = socket.gethostbyname(hostname)
-        print(f"[*] Cible resolue : {hostname} -> Adresse IP : {target_ip}")
-    except Exception:
-        print(f"[-] Impossible de resoudre le nom d'hote extrait : '{hostname}'")
+    # Splitting and cleaning up the inputs into individual elements
+    targets = [t.strip() for t in raw_input.split(",") if t.strip()]
+    if not targets:
+        print("[-] No valid targets discovered.")
         return
         
     try:
-        start_port = int(input("Port de debut du scan (ex: 1) : "))
-        end_port = int(input("Port de fin du scan (ex: 100) : "))
+        start_port = int(input("\n[Config] Start Port (e.g., 1): "))
+        end_port = int(input("[Config] End Port (e.g., 100): "))
     except ValueError:
-        print("[-] Ports invalides.")
+        print("[-] Invalid ports specified.")
         return
-        
-    # Module : TLS / SSL (Port 443 utilise le nom d'hote propre)
-    print("\n[*] Verification du certificat TLS (Port 443)...")
-    tls_results = check_tls_cert(hostname)
-    if tls_results["success"]:
-        print(f"  [+] Certificat : {tls_results['status']} (Expire dans {tls_results['remaining_days']} jours)")
-    else:
-        print(f"  [-] Erreur TLS / Port 443 non sécurisé ou injoignable")
 
-    # Module : Analyse HTTP (Utilise la saisie de l'utilisateur pour tester l'URL exacte demandee)
-    print("[*] Analyse des en-tetes HTTP en cours...")
-    http_results = analyze_http_headers(user_input)
-    
-    # Module : Scan de ports multi-thread
-    print(f"[*] Scan des ports {start_port} a {end_port} sur {target_ip}...")
-    port_results = {}
-    
-    def worker(port):
-        status = scan_port(target_ip, port)
-        with print_lock:
-            port_results[port] = status
-            if status == "OUVERT":
-                print(f"  [+] Port {port:<5} : \033[92m{status}\033[0m")
-                
-    with ThreadPoolExecutor(max_workers=100) as executor:
-        for port in range(start_port, end_port + 1):
-            executor.submit(worker, port)
+    # Loop to process every item sequentially
+    for target in targets:
+        print("\n" + "=" * 60)
+        print(f" Processing Target: {target}")
+        print("=" * 60)
+        
+        hostname = clean_target(target)
+        try:
+            target_ip = socket.gethostbyname(hostname)
+            print(f"[*] Target resolved: {hostname} -> IP: {target_ip}")
+        except Exception:
+            print(f"[-] Could not resolve network host for raw input: '{target}' (Skipping)")
+            continue
             
-    # Consolidation et ecriture des rapports
-    print("\n[*] Compilation des resultats et ecriture des rapports...")
-    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    md_file, html_file = generate_reports(user_input, hostname, target_ip, port_results, http_results, tls_results, now_str)
-    
-    print("-" * 60)
-    print(f" [OK] Fin de l'audit ! Rapports generes :")
-    print(f"      Rapport Markdown : {md_file}")
-    print(f"      Rapport HTML     : {html_file}")
+        print("[*] Verifying TLS Certificate context...")
+        tls_results = check_tls_cert(hostname)
+        if tls_results["success"]:
+            print(f"  [+] Cert Status: {tls_results['status']} ({tls_results['remaining_days']} days remaining)")
+        else:
+            print(f"  [-] TLS Handshake failed or port 443 closed")
+
+        print("[*] Scraping application HTTP Headers...")
+        http_results = analyze_http_headers(target)
+        if http_results["success"]:
+            print(f"  [+] Headers checked. Score: {http_results['score']}/10")
+            
+        print(f"[*] Multithreaded TCP scanner firing up for ports {start_port} to {end_port}...")
+        port_results = {}
+        
+        def worker(port):
+            status = scan_port(target_ip, port)
+            with print_lock:
+                port_results[port] = status
+                if status == "OPEN":
+                    print(f"  [+] Alert - Port {port:<5} : {status}")
+                    
+        with ThreadPoolExecutor(max_workers=100) as executor:
+            for port in range(start_port, end_port + 1):
+                executor.submit(worker, port)
+                
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        md_file, html_file = generate_reports(target, hostname, target_ip, port_results, http_results, tls_results, now_str)
+        
+        print(f"[✔] Reports generated successfully for {hostname}:")
+        print(f"    -> {md_file}")
+        print(f"    -> {html_file}")
+
+    print("\n" + "-" * 60)
+    print(" [OK] Bulk audit queue execution completely done.")
     print("-" * 60)
 
 if __name__ == '__main__':
