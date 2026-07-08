@@ -43,7 +43,7 @@ Follow these steps to set up and execute the auditor on your local machine.
 Bash
 
 ```
-git clone https://github.com/your-username/your-repo.git
+git clone https://github.com/Aerolyse/PyOditor.git
 cd your-repo
 ```
 
